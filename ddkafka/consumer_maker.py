@@ -132,6 +132,13 @@ class KafkaConsumerRepositoryMaker(Generic[DomainT]):
             await asyncio.sleep(self._stream_round_pause.total_seconds())
 
     async def checkpoint(self) -> None:
+        """
+        Extends the lock and commits every batch yielded so far, including the one being processed.
+
+        `get_batches` calls it after the caller is done with a batch. Calling it yourself from
+        inside the loop commits the current batch before it is processed: if the processing then
+        fails, those records are gone.
+        """
         await self.lock.extend()
         await self.consumer_repo.commit()
 

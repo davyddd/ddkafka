@@ -132,6 +132,10 @@ async with KafkaConsumerRepositoryMaker(
         await process(batch)
 ```
 
+Every batch is committed as a whole after the caller is done with it; a batch the caller fails on is not committed
+and is read again next time, so processing must tolerate repeated records (`idempotent_key`). `batch_size` bounds
+how much is reprocessed. `maker.checkpoint()` commits the current batch, so call it only once the batch is processed.
+
 With `stream=True` the consumer does not return when the topic runs dry: it keeps the lock alive and polls
 again after `stream_round_pause`, so a cron that starts it acts as a supervisor and messages are picked up as
 they land. The pace must fit the lock: `stream_round_pause` plus the consumer's poll timeout may not exceed half

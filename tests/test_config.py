@@ -76,8 +76,8 @@ class TestConsumerConfig(TestCase):
         # Assert
         self.assertFalse(kwargs['enable_auto_commit'])
         self.assertEqual(kwargs['auto_offset_reset'], 'earliest')
-        self.assertLess(kwargs['heartbeat_interval_ms'] * 3, kwargs['session_timeout_ms'])
-        self.assertGreater(kwargs['request_timeout_ms'], kwargs['session_timeout_ms'])
+        self.assertNotIn('session_timeout_ms', kwargs)
+        self.assertNotIn('heartbeat_interval_ms', kwargs)
 
     def test_other_aiokafka_arguments_are_forwarded(self):
         # Act

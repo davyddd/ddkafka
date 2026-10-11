@@ -83,8 +83,11 @@ class ConsumerConfig(BaseModel):
     passed as well and is forwarded untouched.
 
     The defaults make a batch consumer: offsets are committed by the repository after a batch is
-    processed (at-least-once), fetches wait for a meaningful amount of data, and the session is long
-    enough to survive a slow batch.
+    processed (at-least-once) and fetches wait for a meaningful amount of data.
+
+    The repository assigns its partition explicitly (`assign`, not `subscribe`), so the consumer never
+    joins the group: `session_timeout_ms`, `heartbeat_interval_ms` and the other group membership
+    settings have no effect here and are left out. They can still be passed if a consumer subscribes.
     """
 
     model_config = ConfigDict(frozen=True, extra='allow')
@@ -111,25 +114,9 @@ class ConsumerConfig(BaseModel):
             'middle of a batch would lose them.'
         ),
     )
-    session_timeout_ms: int = Field(
-        default=20_000,
-        description=(
-            'How long the broker waits for a heartbeat before declaring the consumer dead and rebalancing '
-            "its partitions. Must be within the broker's `group.min/max.session.timeout.ms`."
-        ),
-    )
     request_timeout_ms: int = Field(
         default=25_000,
-        description=(
-            'How long a request to the broker may wait for a response. aiokafka requires it to exceed `session_timeout_ms`.'
-        ),
-    )
-    heartbeat_interval_ms: int = Field(
-        default=6_500,
-        description=(
-            'How often the consumer sends heartbeats to the group coordinator. Kafka recommends at most a '
-            'third of `session_timeout_ms`, so a couple of missed heartbeats do not trigger a rebalance.'
-        ),
+        description='How long a request to the broker may wait for a response.',
     )
     retry_backoff_ms: int = Field(
         default=1_000,

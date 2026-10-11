@@ -1,5 +1,5 @@
 from types import new_class
-from typing import ClassVar
+from typing import ClassVar, cast
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import patch
 
@@ -8,7 +8,7 @@ from aiokafka.structs import OffsetAndTimestamp
 from pydantic import BaseModel
 
 from ddkafka.config import ConsumerConfig
-from ddkafka.consumer import BaseKafkaConsumerRepository
+from ddkafka.consumer import BaseKafkaConsumerRepository, MessageDeserializationError
 from tests.fakes import BOOTSTRAP_SERVERS, Event, FakeAIOKafkaConsumer, Record, packed
 
 
@@ -211,6 +211,79 @@ class TestConsumerLifecycle(IsolatedAsyncioTestCase):
 
         # Assert
         self.assertEqual(sizes, [2])
+
+
+class TestPoisonMessage(IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.created: list[FakeAIOKafkaConsumer] = []
+
+        def factory(**kwargs):
+            self.created.append(FakeAIOKafkaConsumer(**kwargs))
+            return self.created[-1]
+
+        patcher = patch('ddkafka.consumer.AIOKafkaConsumer', side_effect=factory)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    async def test_raises_with_the_offset_by_default(self):
+        # Arrange
+        repo = EventConsumerRepository(partition=3)
+        self.created[-1].polls = [[Record(7, packed(1)), Record(8, b'not msgpack'), Record(9, packed(2))]]
+
+        # Act & Assert
+        with self.assertRaises(MessageDeserializationError) as ctx:
+            async for _ in repo.get_batches():
+                pass
+        self.assertEqual((ctx.exception.topic, ctx.exception.partition, ctx.exception.offset), ('events', 3, 8))
+        self.assertIsNotNone(ctx.exception.__cause__)
+        self.assertIn('offset 8', str(ctx.exception))
+
+        # nothing was handed out, so nothing is committed
+        await repo.commit()
+        self.assertEqual(self.created[-1].committed, [])
+
+    async def test_skips_and_logs_when_allowed(self):
+        # Arrange
+        class LenientConsumer(EventConsumerRepository):
+            skip_undeserializable = True
+
+        repo = LenientConsumer(partition=0)
+        self.created[-1].polls = [[Record(7, packed(1)), Record(8, b'not msgpack'), Record(9, packed(2))]]
+
+        # Act
+        with self.assertLogs('ddkafka.consumer', level='ERROR') as logs:
+            batches = [[event.event_id for event in batch] async for batch in repo.get_batches()]
+        await repo.commit()
+
+        # Assert: the bad record is gone, its offset is committed with the batch
+        self.assertEqual(batches, [[1, 2]])
+        self.assertEqual(self.created[-1].committed, [{PARTITION: 10}])
+        self.assertEqual(len(logs.records), 1)
+        self.assertEqual(cast('dict', logs.records[0].msg)['offset'], 8)
+
+    async def test_a_batch_of_only_bad_records_is_not_handed_out_but_is_committed(self):
+        # Arrange
+        class LenientConsumer(EventConsumerRepository):
+            skip_undeserializable = True
+
+        repo = LenientConsumer(partition=0)
+        self.created[-1].polls = [[Record(0, b'x'), Record(1, b'y')]]
+
+        # Act
+        with self.assertLogs('ddkafka.consumer', level='ERROR'):
+            batches = [batch async for batch in repo.get_batches()]
+        await repo.commit()
+
+        # Assert
+        self.assertEqual(batches, [])
+        self.assertEqual(self.created[-1].committed, [{PARTITION: 2}])
+
+    def test_flag_must_be_a_bool(self):
+        # Act & Assert
+        with self.assertRaisesRegex(TypeError, '`skip_undeserializable`.*must be bool'):
+
+            class Broken(EventConsumerRepository):
+                skip_undeserializable = 'yes'  # type: ignore[assignment]
 
 
 class TestOtherDeserializable(IsolatedAsyncioTestCase):

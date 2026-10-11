@@ -1,6 +1,6 @@
 import time
 from abc import ABC
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from logging import getLogger
 from typing import Any, ClassVar, Generic, Protocol, Self, TypeVar
 
@@ -21,6 +21,16 @@ class Deserializable(Protocol):
 DomainT = TypeVar('DomainT', bound=Deserializable)
 
 
+class MessageDeserializationError(Exception):
+    """A record that cannot be turned into the domain type; names the record so the offset can be skipped."""
+
+    def __init__(self, topic: str, partition: int, offset: int):
+        self.topic = topic
+        self.partition = partition
+        self.offset = offset
+        super().__init__(f'Cannot deserialize the message at {topic}[{partition}] offset {offset}')
+
+
 class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
     """
     Base async Kafka consumer repository: one instance reads one partition of `topic` in batches.
@@ -29,6 +39,11 @@ class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
     polls until the partition runs dry or a poll comes back too thin (`min_batch_fill_ratio`),
     and `commit` acknowledges every batch yielded so far, including the one being processed.
 
+    A record that cannot be deserialized (a schema the consumer does not know, a foreign payload)
+    raises `MessageDeserializationError` with its offset, and the partition stays at that offset
+    until someone moves it. A consumer whose stream can afford to lose such a record sets
+    `skip_undeserializable = True`: the record is logged with its offset and dropped instead.
+
     Class Attributes:
         bootstrap_servers: Kafka servers address
         topic: Topic name
@@ -36,6 +51,7 @@ class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
         batch_size: Max records per poll
         poll_timeout_ms: Timeout for poll operation in milliseconds
         min_batch_fill_ratio: Minimum batch fill ratio to continue (0.0-1.0)
+        skip_undeserializable: Drop records that cannot be deserialized instead of raising
         config: Consumer configuration
 
     Example:
@@ -52,6 +68,7 @@ class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
     batch_size: ClassVar[int] = 1_000
     poll_timeout_ms: ClassVar[int] = 10_000
     min_batch_fill_ratio: ClassVar[float] = 0.1
+    skip_undeserializable: ClassVar[bool] = False
     config: ClassVar[ConsumerConfig] = ConsumerConfig()
 
     _domain_class: ClassVar[type[Deserializable]]
@@ -75,6 +92,7 @@ class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
             raise ValueError(f'`poll_timeout_ms` class attribute of {cls.__name__} must not be negative')
         if not (0 <= require_class_attribute(cls, 'min_batch_fill_ratio', float) <= 1):
             raise ValueError(f'`min_batch_fill_ratio` class attribute of {cls.__name__} must be between 0 and 1')
+        require_class_attribute(cls, 'skip_undeserializable', bool)
         require_class_attribute(cls, 'config', ConsumerConfig)
 
     def __init__(self, partition: int):
@@ -83,8 +101,24 @@ class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
         self._processed_offsets: dict[TopicPartition, int] = {}
         self._create_consumer()
 
-    def _deserialize_value(self, value: bytes) -> DomainT:
-        return self._domain_class.model_validate(msgpack.loads(value))  # type: ignore[return-value]
+    def _deserialize(self, records: list[Any]) -> Iterator[DomainT]:
+        # Done here rather than through aiokafka's `value_deserializer`, where a failure surfaces
+        # from `getmany` without the record it happened on.
+        for record in records:
+            try:
+                yield self._domain_class.model_validate(msgpack.loads(record.value))  # type: ignore[misc]
+            except Exception as e:
+                if not self.skip_undeserializable:
+                    raise MessageDeserializationError(self.topic, self._partition, record.offset) from e
+                logger.error(
+                    {
+                        'message': 'KAFKA_CONSUMER: Skipped a message that cannot be deserialized',
+                        'topic': self.topic,
+                        'partition': self._partition,
+                        'offset': record.offset,
+                        'error': repr(e),
+                    }
+                )
 
     def _create_consumer(self) -> None:
         logger.info(
@@ -99,7 +133,6 @@ class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
         self._consumer = AIOKafkaConsumer(
             bootstrap_servers=self.bootstrap_servers,
             group_id=self.group_id,
-            value_deserializer=self._deserialize_value,
             **self.config.model_dump(),
         )
         self._consumer.assign([self._topic_partition])
@@ -124,6 +157,26 @@ class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
         offset_and_timestamp = offsets_for_times.get(self._topic_partition)
         return offset_and_timestamp.offset if offset_and_timestamp else None
 
+    async def _poll(self, offset_limit: int | None) -> list[Any]:
+        """One `getmany` for the partition; with `offset_limit` only the records before it."""
+        records_by_partition = await self._consumer.getmany(
+            self._topic_partition, timeout_ms=self.poll_timeout_ms, max_records=self.batch_size
+        )
+        records = records_by_partition.get(self._topic_partition, [])
+
+        logger.info(
+            {
+                'message': 'KAFKA_CONSUMER: Retrieved batch',
+                'topic': self.topic,
+                'partition': self._partition,
+                'records_count': len(records),
+            }
+        )
+
+        if offset_limit is not None:
+            records = [record for record in records if record.offset < offset_limit]
+        return records
+
     async def get_batches(self, timestamp_threshold_minutes: int | None = None) -> AsyncIterator[tuple[DomainT, ...]]:
         """
         Returns an async iterator over batches of domain entities.
@@ -137,38 +190,27 @@ class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
             offset_limit = await self._get_offset_limit(timestamp_threshold_minutes)
 
         while True:
-            records_by_partition = await self._consumer.getmany(
-                self._topic_partition, timeout_ms=self.poll_timeout_ms, max_records=self.batch_size
-            )
-            records = records_by_partition.get(self._topic_partition, [])
-
-            logger.info(
-                {
-                    'message': 'KAFKA_CONSUMER: Retrieved batch',
-                    'topic': self.topic,
-                    'partition': self._partition,
-                    'records_count': len(records),
-                }
-            )
-
+            records = await self._poll(offset_limit)
             if not records:
                 break
 
-            if offset_limit is not None:
-                records = [record for record in records if record.offset < offset_limit]
-                if not records:
-                    break
+            values = tuple(self._deserialize(records))
+            records_count, last_offset = len(records), records[-1].offset
+            # The raw records are not needed past this point; dropping them before the batch is
+            # handed out frees the msgpack payloads while the caller works on the domain objects.
+            del records
 
             # Recorded before the batch is handed out, so `commit` right after processing it
             # acknowledges this batch and not the previous one. The caller is responsible for not
             # committing a batch it failed on (the maker skips the commit on an exceptional exit).
-            self._processed_offsets[self._topic_partition] = records[-1].offset + 1
+            self._processed_offsets[self._topic_partition] = last_offset + 1
 
-            yield tuple(record.value for record in records)
+            if values:  # a batch of skipped records only is nothing to hand out
+                yield values
 
             # A poll that came back mostly empty means the partition is nearly drained: finish
             # after this batch instead of waiting `poll_timeout_ms` for a handful more.
-            if len(records) < self.batch_size * self.min_batch_fill_ratio:
+            if records_count < self.batch_size * self.min_batch_fill_ratio:
                 break
 
     async def commit(self) -> None:
@@ -187,4 +229,4 @@ class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
         self._processed_offsets.clear()
 
 
-__all__ = ('BaseKafkaConsumerRepository', 'Deserializable')
+__all__ = ('BaseKafkaConsumerRepository', 'Deserializable', 'MessageDeserializationError')

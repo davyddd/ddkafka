@@ -108,6 +108,11 @@ Tunables are class attributes: `batch_size`, `poll_timeout_ms`, `min_batch_fill_
 (`ConsumerConfig`, passed to `AIOKafkaConsumer` as keyword arguments). Missing or mistyped attributes fail at
 class definition.
 
+A record that cannot be deserialized (a schema the consumer does not know, a payload written by something else)
+raises `MessageDeserializationError` with the topic, partition and offset, and the partition stays at that offset
+until the group's offset is moved past it. A consumer whose stream can afford to lose such a record sets
+`skip_undeserializable = True`: the record is logged with its offset and dropped, the rest of the batch goes on.
+
 ## Consumer maker
 
 `KafkaConsumerRepositoryMaker` wraps a consumer in a distributed lock, so one partition is processed by one

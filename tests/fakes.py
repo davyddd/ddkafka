@@ -30,11 +30,10 @@ class Record:
 
 
 class FakeAIOKafkaConsumer:
-    """Returns the prepared polls one by one, then empty ones; records go through the deserializer."""
+    """Returns the prepared polls one by one, then empty ones; record values are raw msgpack bytes."""
 
-    def __init__(self, *, value_deserializer, **kwargs: Any):
+    def __init__(self, **kwargs: Any):
         self.kwargs = kwargs
-        self.value_deserializer = value_deserializer
         self.polls: list[list[Record]] = []
         self.offsets_for_times_result: dict[TopicPartition, OffsetAndTimestamp | None] = {}
         self.assigned: list[TopicPartition] = []
@@ -56,8 +55,7 @@ class FakeAIOKafkaConsumer:
         self.getmany_calls.append({'timeout_ms': timeout_ms, 'max_records': max_records})
         if not self.polls:
             return {}
-        records = [Record(record.offset, self.value_deserializer(record.value)) for record in self.polls.pop(0)]
-        return {partitions[0]: records}
+        return {partitions[0]: self.polls.pop(0)}
 
     async def offsets_for_times(self, _timestamps: dict[TopicPartition, int]) -> dict:
         return self.offsets_for_times_result

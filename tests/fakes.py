@@ -1,5 +1,6 @@
 """Stand-ins for aiokafka and the lock, so the tests run without a broker."""
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -70,16 +71,22 @@ def packed(event_id: int, name: str = 'x') -> bytes:
 
 
 class FakeAIOKafkaProducer:
+    """Records what was sent; `deliveries` are the futures `send` returned, resolved by the test."""
+
     def __init__(self, **kwargs: Any):
         self.kwargs = kwargs
         self.started = False
         self.sent: list[tuple[str, Any, Any]] = []
+        self.deliveries: list[asyncio.Future] = []
 
     async def start(self) -> None:
         self.started = True
 
-    async def send(self, topic: str, key: Any = None, value: Any = None) -> None:
+    async def send(self, topic: str, key: Any = None, value: Any = None) -> asyncio.Future:
         self.sent.append((topic, self.kwargs['key_serializer'](key), self.kwargs['value_serializer'](value)))
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        self.deliveries.append(future)
+        return future
 
 
 @dataclass

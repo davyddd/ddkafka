@@ -1,8 +1,10 @@
-from typing import ClassVar
+import asyncio
+from typing import ClassVar, cast
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import patch
 
 import msgpack
+from aiokafka.errors import NotEnoughReplicasError
 
 from ddkafka.config import ProducerConfig
 from ddkafka.producer import BaseKafkaProducerRepository, serialize_key, serialize_value
@@ -72,3 +74,31 @@ class TestBaseKafkaProducerRepository(IsolatedAsyncioTestCase):
         self.assertTrue(producer.kwargs['enable_idempotence'])
         self.assertEqual([key for _, key, _ in producer.sent], [b'1', b'2', b'3'])
         self.assertEqual(msgpack.loads(producer.sent[2][2]), {'event_id': 3, 'name': 'c'})
+
+    async def test_rejected_delivery_is_logged_and_accepted_one_is_silent(self):
+        # Arrange
+        class EventProducerRepository(BaseKafkaProducerRepository):
+            bootstrap_servers = BOOTSTRAP_SERVERS
+
+        created: list[FakeAIOKafkaProducer] = []
+
+        def factory(**kwargs):
+            created.append(FakeAIOKafkaProducer(**kwargs))
+            return created[-1]
+
+        with patch('ddkafka.producer.AIOKafkaProducer', side_effect=factory):
+            await EventProducerRepository().bulk_create('events', [Event(event_id=1, name='a'), Event(event_id=2, name='b')])
+        producer = created[0]
+
+        # Act
+        with self.assertLogs('ddkafka.producer', level='ERROR') as logs:
+            producer.deliveries[0].set_result('record metadata')
+            producer.deliveries[1].set_exception(NotEnoughReplicasError('isr too small'))
+            await asyncio.sleep(0)  # let the done callbacks run
+
+        # Assert
+        self.assertEqual(len(logs.records), 1)
+        entry = cast('dict', logs.records[0].msg)
+        self.assertEqual(entry['topic'], 'events')
+        self.assertEqual(entry['key'], '2')
+        self.assertIn('NotEnoughReplicasError', entry['error'])

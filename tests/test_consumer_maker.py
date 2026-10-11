@@ -64,9 +64,44 @@ class TestKafkaConsumerRepositoryMaker(IsolatedAsyncioTestCase):
         self.assertEqual(len(batches), 1)
         self.assertTrue(kafka.started)
         self.assertTrue(kafka.stopped)
-        # one checkpoint after the batch, one commit on exit (nothing new -> no second commit call)
+        # the checkpoint after the batch committed it; the commit on exit had nothing new
         self.assertEqual(kafka.committed, [{PARTITION: 2}])
         self.assertEqual(maker.lock.calls, ['acquire', 'extend', 'release'])
+
+    async def test_each_checkpoint_commits_the_batch_just_processed(self):
+        # Arrange
+        maker = self.make()
+
+        async with maker:
+            kafka = self.created[-1]
+            kafka.polls = [[Record(i, packed(i)) for i in range(10)], [Record(10, packed(10)), Record(11, packed(11))]]
+            commits_seen: list[list[dict]] = []
+
+            # Act: look at the commits right after each batch comes back
+            async for _ in maker.get_batches():
+                commits_seen.append(list(kafka.committed))
+
+        # Assert: before batch 1 nothing; before batch 2 the checkpoint has committed batch 1
+        self.assertEqual(commits_seen, [[], [{PARTITION: 10}]])
+        self.assertEqual(kafka.committed, [{PARTITION: 10}, {PARTITION: 12}])
+
+    async def test_failed_batch_is_not_committed(self):
+        # Arrange
+        maker = self.make()
+
+        # Act
+        with self.assertRaises(ValueError):
+            async with maker:
+                kafka = self.created[-1]
+                kafka.polls = [[Record(i, packed(i)) for i in range(10)], [Record(10, packed(10))]]
+                async for batch in maker.get_batches():
+                    if batch[0].event_id == 10:  # noqa: PLR2004
+                        raise ValueError('cannot process')
+
+        # Assert: batch 1 was checkpointed, batch 2 stays uncommitted; the lock is released anyway
+        self.assertEqual(kafka.committed, [{PARTITION: 10}])
+        self.assertTrue(kafka.stopped)
+        self.assertEqual(maker.lock.calls[-1], 'release')
 
     async def test_failed_start_releases_the_lock_and_raises_consumer_start_error(self):
         # Arrange

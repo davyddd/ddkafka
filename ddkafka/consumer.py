@@ -27,7 +27,7 @@ class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
 
     Messages are msgpack payloads turned into the domain type with `model_validate`. `get_batches`
     polls until the partition runs dry or a poll comes back too thin (`min_batch_fill_ratio`),
-    and `commit` acknowledges everything yielded so far.
+    and `commit` acknowledges every batch yielded so far, including the one being processed.
 
     Class Attributes:
         bootstrap_servers: Kafka servers address
@@ -159,15 +159,16 @@ class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
                 if not records:
                     break
 
-            # A poll that came back mostly empty means the partition is nearly drained: finish
-            # after this batch instead of waiting `poll_timeout_ms` for a handful more.
-            should_break = len(records) < self.batch_size * self.min_batch_fill_ratio
+            # Recorded before the batch is handed out, so `commit` right after processing it
+            # acknowledges this batch and not the previous one. The caller is responsible for not
+            # committing a batch it failed on (the maker skips the commit on an exceptional exit).
+            self._processed_offsets[self._topic_partition] = records[-1].offset + 1
 
             yield tuple(record.value for record in records)
 
-            self._processed_offsets[self._topic_partition] = records[-1].offset + 1
-
-            if should_break:
+            # A poll that came back mostly empty means the partition is nearly drained: finish
+            # after this batch instead of waiting `poll_timeout_ms` for a handful more.
+            if len(records) < self.batch_size * self.min_batch_fill_ratio:
                 break
 
     async def commit(self) -> None:

@@ -153,19 +153,21 @@ class TestConsumerLifecycle(IsolatedAsyncioTestCase):
         self.assertEqual(sizes, [10])
         self.assertEqual(len(self.kafka.getmany_calls), 2)
 
-    async def test_commit_acknowledges_the_offset_after_the_last_yielded_record(self):
+    async def test_commit_acknowledges_the_batch_being_processed(self):
         # Arrange
         repo = EventConsumerRepository(partition=0)
-        self.kafka.polls = [[Record(5, packed(1)), Record(6, packed(2))]]
+        self.kafka.polls = [[Record(i, packed(i)) for i in range(10)], [Record(10, packed(10)), Record(11, packed(11))]]
 
-        # Act
+        # Act: commit while still inside the loop, before asking for the next batch
+        commits_during_loop = []
         async for _ in repo.get_batches():
-            pass
-        await repo.commit()
-        await repo.commit()  # nothing new -> no second commit call
+            await repo.commit()
+            commits_during_loop.append(list(self.kafka.committed))
+        await repo.commit()  # nothing new -> no extra commit call
 
         # Assert
-        self.assertEqual(self.kafka.committed, [{PARTITION: 7}])
+        self.assertEqual(commits_during_loop, [[{PARTITION: 10}], [{PARTITION: 10}, {PARTITION: 12}]])
+        self.assertEqual(self.kafka.committed, [{PARTITION: 10}, {PARTITION: 12}])
 
     async def test_timestamp_threshold_limits_the_offsets(self):
         # Arrange: only records older than the threshold (offset < 12) are yielded

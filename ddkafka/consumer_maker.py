@@ -36,7 +36,8 @@ class KafkaConsumerRepositoryMaker(Generic[DomainT]):
     The lock (anything satisfying `Lockable`, e.g. `ddredis.lock.RedisLock`) is keyed by group,
     topic and partition, so only one consumer per partition runs across all workers. Entering
     acquires the lock and starts the consumer; every batch yielded by `get_batches` is followed
-    by a checkpoint (lock heartbeat + offset commit); leaving commits, stops and releases.
+    by a checkpoint (lock heartbeat + offset commit); leaving commits, stops and releases. An exit
+    caused by an exception does not commit, so the batch being processed is read again next time.
 
     `stream` decides what happens when the topic runs dry. Without it the consumer drains what
     is waiting and returns, which is what a periodic sync wants. With it the consumer stays on
@@ -157,8 +158,11 @@ class KafkaConsumerRepositoryMaker(Generic[DomainT]):
             await self.lock.release()
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        # The offsets of a yielded batch are already recorded, so an exit caused by an error in
+        # the caller must not commit: the batch it failed on stays in the topic for the next run.
         try:
-            await self.consumer_repo.commit()
+            if exc_type is None:
+                await self.consumer_repo.commit()
         finally:
             await self._close()
 

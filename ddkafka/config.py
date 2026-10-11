@@ -97,7 +97,13 @@ class ConsumerConfig(BaseModel):
             "`'latest'` only new records, `'none'` raises and leaves the decision to the caller."
         ),
     )
-    enable_auto_commit: bool = Field(
+    # Only False is accepted. Auto commit acknowledges the consumer's position, the offset right after the
+    # last record `getmany` returned, every `auto_commit_interval_ms`, regardless of what the application
+    # has done with those records. That breaks everything the repository relies on: `commit()` after a
+    # processed batch (at-least-once) becomes meaningless, records filtered out by
+    # `timestamp_threshold_minutes` get committed past and are never read again, and a partition that
+    # must stay on an undeserializable record is silently moved past it.
+    enable_auto_commit: Literal[False] = Field(
         default=False,
         description=(
             'Must stay False: `BaseKafkaConsumerRepository.commit` acknowledges offsets after a batch is '

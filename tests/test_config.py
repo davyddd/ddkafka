@@ -86,6 +86,11 @@ class TestConsumerConfig(TestCase):
         # Assert
         self.assertEqual(kwargs['max_poll_records'], 500)
 
+    def test_auto_commit_cannot_be_enabled(self):
+        # Act & Assert
+        with self.assertRaises(ValidationError):
+            ConsumerConfig(enable_auto_commit=True)  # type: ignore[arg-type]
+
     def test_offset_reset_accepts_only_the_kafka_values(self):
         # Act & Assert
         with self.assertRaises(ValidationError):

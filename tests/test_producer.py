@@ -102,3 +102,57 @@ class TestBaseKafkaProducerRepository(IsolatedAsyncioTestCase):
         self.assertEqual(entry['topic'], 'events')
         self.assertEqual(entry['key'], '2')
         self.assertIn('NotEnoughReplicasError', entry['error'])
+
+
+class TestProducerLifecycle(IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.created: list[FakeAIOKafkaProducer] = []
+
+        def factory(**kwargs):
+            self.created.append(FakeAIOKafkaProducer(**kwargs))
+            return self.created[-1]
+
+        patcher = patch('ddkafka.producer.AIOKafkaProducer', side_effect=factory)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        class EventProducerRepository(BaseKafkaProducerRepository):
+            bootstrap_servers = BOOTSTRAP_SERVERS
+
+        self.repository_class = EventProducerRepository
+
+    async def test_concurrent_first_sends_start_one_producer(self):
+        # Arrange
+        repo = self.repository_class()
+        events = [Event(event_id=i, name='x') for i in range(5)]
+
+        # Act
+        await asyncio.gather(*(repo.create('events', event) for event in events))
+
+        # Assert
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(len(self.created[0].sent), 5)
+
+    async def test_stop_flushes_and_the_repository_refuses_to_send_afterwards(self):
+        # Arrange
+        repo = self.repository_class()
+        await repo.create('events', Event(event_id=1, name='a'))
+
+        # Act
+        await self.repository_class.stop()
+        await self.repository_class.stop()  # nothing to stop, no error
+
+        # Assert
+        self.assertTrue(self.created[0].stopped)
+        with self.assertRaisesRegex(RuntimeError, 'was stopped'):
+            await repo.create('events', Event(event_id=2, name='b'))
+        self.assertEqual(len(self.created), 1)
+
+    async def test_stop_before_any_send_still_closes_the_repository(self):
+        # Act
+        await self.repository_class.stop()
+
+        # Assert
+        with self.assertRaises(RuntimeError):
+            await self.repository_class().create('events', Event(event_id=1, name='a'))
+        self.assertEqual(self.created, [])

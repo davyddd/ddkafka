@@ -76,11 +76,15 @@ class FakeAIOKafkaProducer:
     def __init__(self, **kwargs: Any):
         self.kwargs = kwargs
         self.started = False
+        self.stopped = False
         self.sent: list[tuple[str, Any, Any]] = []
         self.deliveries: list[asyncio.Future] = []
 
     async def start(self) -> None:
         self.started = True
+
+    async def stop(self) -> None:
+        self.stopped = True
 
     async def send(self, topic: str, key: Any = None, value: Any = None) -> asyncio.Future:
         self.sent.append((topic, self.kwargs['key_serializer'](key), self.kwargs['value_serializer'](value)))

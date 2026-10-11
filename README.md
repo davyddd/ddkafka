@@ -65,11 +65,14 @@ await event_producer_repository_impl.bulk_create('profile_events', events)
 Any object with `idempotent_key` and `model_dump` satisfies the `Producible` protocol; pydantic models only need the
 property.
 
-`ProducerConfig` defaults to `acks='all'`: a send is confirmed once every in-sync replica has the record, which is
-the only mode where the cluster's `min.insync.replicas` applies. Replication factor and min ISR are cluster
-settings chosen by devops; overriding `acks` in the application changes the delivery guarantee they set up, so
-do it knowingly. Both configs are frozen pydantic models; every field carries a description with its trade-off.
-Any other `aiokafka` keyword argument (`compression_type`, `max_poll_records`, ...) can be passed and is forwarded as is.
+`create` and `bulk_create` return once the record is in the producer's buffer; aiokafka sends buffered records in
+batches (`linger_ms`, `max_batch_size`), and a record the broker rejects is reported with an ERROR log entry. The
+buffer only reaches Kafka while the process runs, so call `stop()` on shutdown (FastAPI lifespan, dramatiq
+`after_worker_shutdown`), otherwise up to `linger_ms` worth of records is lost on SIGTERM:
+
+```python
+await EventProducerRepository.stop()
+```
 
 ## Consumer
 

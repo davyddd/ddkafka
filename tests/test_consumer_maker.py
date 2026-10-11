@@ -88,6 +88,21 @@ class TestKafkaConsumerRepositoryMaker(IsolatedAsyncioTestCase):
         self.assertIsInstance(ctx.exception.__cause__, ConnectionError)
         self.assertEqual(maker.lock.calls, ['acquire', 'release'])
 
+    async def test_failed_constructor_releases_the_lock(self):
+        # Arrange: aiokafka refuses to build a consumer, e.g. outside a running loop
+        maker = self.make()
+
+        # Act & Assert
+        with (
+            patch('ddkafka.consumer.AIOKafkaConsumer', side_effect=RuntimeError('no event loop')),
+            self.assertRaises(ConsumerStartError) as ctx,
+        ):
+            async with maker:
+                pass
+
+        self.assertIsInstance(ctx.exception.__cause__, RuntimeError)
+        self.assertEqual(maker.lock.calls, ['acquire', 'release'])
+
     async def test_taken_lock_propagates_and_nothing_is_started(self):
         # Arrange
         maker = self.make(lock_kwargs={'fail_acquire': True})

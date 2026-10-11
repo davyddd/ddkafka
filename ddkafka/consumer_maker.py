@@ -134,23 +134,27 @@ class KafkaConsumerRepositoryMaker(Generic[DomainT]):
         await self.lock.extend()
         await self.consumer_repo.commit()
 
-    async def _close(self) -> None:
-        try:
-            await self.consumer_repo.stop()
-        finally:
-            await self.lock.release()
-
     async def __aenter__(self) -> Self:
         await self.lock.acquire()
 
-        self.consumer_repo = self._consumer_class(partition=self._partition)
+        # Anything that fails after the lock is taken has to give it back, or the partition stays
+        # locked until the lock's timeout: the constructor (aiokafka needs a running loop) as much
+        # as `start` (no broker).
         try:
+            self.consumer_repo = self._consumer_class(partition=self._partition)
             await self.consumer_repo.start()
         except Exception as e:  # noqa: BLE001
             await self._close()
             raise ConsumerStartError('Failed to start consumer') from e
 
         return self
+
+    async def _close(self) -> None:
+        try:
+            if hasattr(self, 'consumer_repo'):
+                await self.consumer_repo.stop()
+        finally:
+            await self.lock.release()
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         try:

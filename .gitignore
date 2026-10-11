@@ -1,0 +1,15 @@
+*.log
+*.pyc
+.DS_Store
+.idea/*
+.vscode/*
+*.dump
+.__pycache__/*
+.pytest_cache/
+.ruff_cache/
+.complexipy_cache/
+.venv/
+dist/*
+TODO.md
+.coverage
+coverage.xml

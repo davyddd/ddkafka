@@ -1,0 +1,7 @@
+services:
+    ddkafka:
+        build:
+            context: ./
+            dockerfile: ./Dockerfile
+        volumes:
+            - .:/src

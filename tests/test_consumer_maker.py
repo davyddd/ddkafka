@@ -6,12 +6,12 @@ from unittest.mock import patch
 from aiokafka import TopicPartition
 
 from ddkafka.config import ConsumerConfig
-from ddkafka.consumer import BaseKafkaConsumerRepository
-from ddkafka.consumer_maker import ConsumerStartError, KafkaConsumerRepositoryMaker
+from ddkafka.consumer import BaseKafkaConsumer
+from ddkafka.consumer_maker import ConsumerStartError, KafkaConsumerMaker
 from tests.fakes import BOOTSTRAP_SERVERS, Event, FakeAIOKafkaConsumer, FakeLock, Record, packed
 
 
-class EventConsumerRepository(BaseKafkaConsumerRepository[Event]):
+class EventConsumer(BaseKafkaConsumer[Event]):
     bootstrap_servers = BOOTSTRAP_SERVERS
     topic = 'events'
     group_id = 'analytics'
@@ -24,7 +24,7 @@ class EventConsumerRepository(BaseKafkaConsumerRepository[Event]):
 PARTITION = TopicPartition('events', 0)
 
 
-class TestKafkaConsumerRepositoryMaker(IsolatedAsyncioTestCase):
+class TestKafkaConsumerMaker(IsolatedAsyncioTestCase):
     def setUp(self):
         self.created: list[FakeAIOKafkaConsumer] = []
 
@@ -36,17 +36,15 @@ class TestKafkaConsumerRepositoryMaker(IsolatedAsyncioTestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def make(self, **kwargs: Any) -> KafkaConsumerRepositoryMaker[Event]:
+    def make(self, **kwargs: Any) -> KafkaConsumerMaker[Event]:
         lock_kwargs = {'timeout': kwargs.pop('lock_timeout', 60.0), **kwargs.pop('lock_kwargs', {})}
-        return KafkaConsumerRepositoryMaker(
-            consumer_class=EventConsumerRepository, partition=0, lock_class=FakeLock, lock_kwargs=lock_kwargs, **kwargs
+        return KafkaConsumerMaker(
+            consumer_class=EventConsumer, partition=0, lock_class=FakeLock, lock_kwargs=lock_kwargs, **kwargs
         )
 
     def test_lock_key_names_group_topic_and_partition(self):
         # Act & Assert
-        self.assertEqual(
-            KafkaConsumerRepositoryMaker.build_lock_key(EventConsumerRepository, 7), 'analytics_events_partition_7'
-        )
+        self.assertEqual(KafkaConsumerMaker.build_lock_key(EventConsumer, 7), 'analytics_events_partition_7')
         self.assertEqual(self.make().lock.key, 'analytics_events_partition_0')
 
     async def test_enter_locks_and_starts_exit_commits_stops_and_releases(self):

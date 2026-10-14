@@ -8,11 +8,11 @@ from aiokafka.structs import OffsetAndTimestamp
 from pydantic import BaseModel
 
 from ddkafka.config import ConsumerConfig
-from ddkafka.consumer import BaseKafkaConsumerRepository, MessageDeserializationError
+from ddkafka.consumer import BaseKafkaConsumer, MessageDeserializationError
 from tests.fakes import BOOTSTRAP_SERVERS, Event, FakeAIOKafkaConsumer, Record, packed
 
 
-class EventConsumerRepository(BaseKafkaConsumerRepository[Event]):
+class EventConsumer(BaseKafkaConsumer[Event]):
     bootstrap_servers = BOOTSTRAP_SERVERS
     topic = 'events'
     group_id = 'analytics'
@@ -28,13 +28,13 @@ PARTITION = TopicPartition('events', 0)
 class TestConsumerSubclassing(IsolatedAsyncioTestCase):
     def test_domain_type_is_taken_from_the_generic_base(self):
         # Act & Assert
-        self.assertIs(EventConsumerRepository._domain_class, Event)
+        self.assertIs(EventConsumer._domain_class, Event)
 
     def test_domain_type_is_required(self):
         # Act & Assert
         with self.assertRaises(TypeError):
 
-            class Untyped(BaseKafkaConsumerRepository):  # type: ignore[type-arg]
+            class Untyped(BaseKafkaConsumer):  # type: ignore[type-arg]
                 bootstrap_servers = BOOTSTRAP_SERVERS
                 topic = 'events'
                 group_id = 'analytics'
@@ -56,13 +56,11 @@ class TestConsumerSubclassing(IsolatedAsyncioTestCase):
             with self.subTest(name=name), self.assertRaisesRegex(error, f'`{name}`.*{message}'):
                 attributes = {**base_attributes, name: bad_value}
                 # Act
-                new_class(
-                    'Broken', (BaseKafkaConsumerRepository[Event],), exec_body=lambda ns, attrs=attributes: ns.update(attrs)
-                )
+                new_class('Broken', (BaseKafkaConsumer[Event],), exec_body=lambda ns, attrs=attributes: ns.update(attrs))
 
     def test_zero_poll_timeout_is_allowed(self):
         # Act
-        class Impatient(BaseKafkaConsumerRepository[Event]):
+        class Impatient(BaseKafkaConsumer[Event]):
             bootstrap_servers = BOOTSTRAP_SERVERS
             topic = 'events'
             group_id = 'analytics'
@@ -91,7 +89,7 @@ class TestConsumerLifecycle(IsolatedAsyncioTestCase):
 
     def test_consumer_is_assigned_to_the_partition_with_the_config(self):
         # Act
-        EventConsumerRepository(partition=3)
+        EventConsumer(partition=3)
 
         # Assert
         self.assertEqual(self.kafka.assigned, [TopicPartition('events', 3)])
@@ -102,7 +100,7 @@ class TestConsumerLifecycle(IsolatedAsyncioTestCase):
 
     async def test_start_and_stop(self):
         # Arrange
-        repo = EventConsumerRepository(partition=0)
+        repo = EventConsumer(partition=0)
 
         # Act
         await repo.start()
@@ -114,7 +112,7 @@ class TestConsumerLifecycle(IsolatedAsyncioTestCase):
 
     async def test_messages_are_deserialized_into_the_domain_type(self):
         # Arrange
-        repo = EventConsumerRepository(partition=0)
+        repo = EventConsumer(partition=0)
         self.kafka.polls = [[Record(0, packed(1, 'a')), Record(1, packed(2, 'b'))]]
 
         # Act
@@ -126,7 +124,7 @@ class TestConsumerLifecycle(IsolatedAsyncioTestCase):
 
     async def test_full_batches_keep_polling_and_a_thin_one_ends_the_run(self):
         # Arrange: 10 (full), 10 (full), 3 (< 10 * 0.5) -> stop without a fourth poll
-        repo = EventConsumerRepository(partition=0)
+        repo = EventConsumer(partition=0)
         self.kafka.polls = [
             [Record(i, packed(i)) for i in range(10)],
             [Record(i, packed(i)) for i in range(10, 20)],
@@ -143,7 +141,7 @@ class TestConsumerLifecycle(IsolatedAsyncioTestCase):
 
     async def test_empty_poll_ends_the_run(self):
         # Arrange
-        repo = EventConsumerRepository(partition=0)
+        repo = EventConsumer(partition=0)
         self.kafka.polls = [[Record(i, packed(i)) for i in range(10)]]
 
         # Act
@@ -155,7 +153,7 @@ class TestConsumerLifecycle(IsolatedAsyncioTestCase):
 
     async def test_commit_acknowledges_the_batch_being_processed(self):
         # Arrange
-        repo = EventConsumerRepository(partition=0)
+        repo = EventConsumer(partition=0)
         self.kafka.polls = [[Record(i, packed(i)) for i in range(10)], [Record(10, packed(10)), Record(11, packed(11))]]
 
         # Act: commit while still inside the loop, before asking for the next batch
@@ -171,7 +169,7 @@ class TestConsumerLifecycle(IsolatedAsyncioTestCase):
 
     async def test_timestamp_threshold_limits_the_offsets(self):
         # Arrange: only records older than the threshold (offset < 12) are yielded
-        repo = EventConsumerRepository(partition=0)
+        repo = EventConsumer(partition=0)
         self.kafka.offsets_for_times_result = {PARTITION: OffsetAndTimestamp(12, 0)}
         self.kafka.polls = [
             [Record(i, packed(i)) for i in range(10)],
@@ -188,7 +186,7 @@ class TestConsumerLifecycle(IsolatedAsyncioTestCase):
 
     async def test_threshold_with_no_older_messages_yields_nothing(self):
         # Arrange
-        repo = EventConsumerRepository(partition=0)
+        repo = EventConsumer(partition=0)
         self.kafka.offsets_for_times_result = {PARTITION: OffsetAndTimestamp(0, 0)}
         self.kafka.polls = [[Record(0, packed(1)), Record(1, packed(2))]]
 
@@ -202,7 +200,7 @@ class TestConsumerLifecycle(IsolatedAsyncioTestCase):
 
     async def test_threshold_without_a_matching_offset_disables_the_filter(self):
         # Arrange: Kafka returns None when every message is older than the threshold
-        repo = EventConsumerRepository(partition=0)
+        repo = EventConsumer(partition=0)
         self.kafka.offsets_for_times_result = {PARTITION: None}
         self.kafka.polls = [[Record(0, packed(1)), Record(1, packed(2))]]
 
@@ -227,7 +225,7 @@ class TestPoisonMessage(IsolatedAsyncioTestCase):
 
     async def test_raises_with_the_offset_by_default(self):
         # Arrange
-        repo = EventConsumerRepository(partition=3)
+        repo = EventConsumer(partition=3)
         self.created[-1].polls = [[Record(7, packed(1)), Record(8, b'not msgpack'), Record(9, packed(2))]]
 
         # Act & Assert
@@ -244,7 +242,7 @@ class TestPoisonMessage(IsolatedAsyncioTestCase):
 
     async def test_skips_and_logs_when_allowed(self):
         # Arrange
-        class LenientConsumer(EventConsumerRepository):
+        class LenientConsumer(EventConsumer):
             skip_undeserializable = True
 
         repo = LenientConsumer(partition=0)
@@ -263,7 +261,7 @@ class TestPoisonMessage(IsolatedAsyncioTestCase):
 
     async def test_a_batch_of_only_bad_records_is_not_handed_out_but_is_committed(self):
         # Arrange
-        class LenientConsumer(EventConsumerRepository):
+        class LenientConsumer(EventConsumer):
             skip_undeserializable = True
 
         repo = LenientConsumer(partition=0)
@@ -282,7 +280,7 @@ class TestPoisonMessage(IsolatedAsyncioTestCase):
         # Act & Assert
         with self.assertRaisesRegex(TypeError, '`skip_undeserializable`.*must be bool'):
 
-            class Broken(EventConsumerRepository):
+            class Broken(EventConsumer):
                 skip_undeserializable = 'yes'  # type: ignore[assignment]
 
 
@@ -297,7 +295,7 @@ class TestOtherDeserializable(IsolatedAsyncioTestCase):
             def model_validate(cls, data: dict) -> 'Plain':
                 return cls(data)
 
-        class PlainConsumer(BaseKafkaConsumerRepository[Plain]):
+        class PlainConsumer(BaseKafkaConsumer[Plain]):
             bootstrap_servers = BOOTSTRAP_SERVERS
             topic = 'events'
             group_id = 'g'

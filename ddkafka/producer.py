@@ -1,6 +1,7 @@
-import asyncio
 from abc import ABC
 from asyncio import Future
+from collections.abc import Hashable
+from contextlib import AbstractAsyncContextManager
 from functools import partial
 from logging import getLogger
 from typing import Any, ClassVar, Protocol
@@ -8,6 +9,7 @@ from typing import Any, ClassVar, Protocol
 import msgpack
 from aiokafka import AIOKafkaProducer
 from ddutils.class_helpers import require_class_attribute
+from ddutils.connections import ConnectionManagerFactory
 
 from ddkafka.config import ProducerConfig
 
@@ -42,81 +44,66 @@ def _log_delivery_failure(topic: str, key: Any, future: Future) -> None:
         logger.error({'message': 'KAFKA_PRODUCER: Delivery failed', 'topic': topic, 'key': key, 'error': repr(error)})
 
 
-class BaseKafkaProducerRepository(ABC):
+async def create_producer(bootstrap_servers: list[str], config: ProducerConfig | None = None) -> AIOKafkaProducer:
+    """
+    A started `AIOKafkaProducer` with the library's serializers, for the `create_func` of the registry behind
+    a producer factory (see `BaseKafkaProducer`).
+    """
+    producer = AIOKafkaProducer(
+        bootstrap_servers=bootstrap_servers,
+        value_serializer=serialize_value,
+        key_serializer=serialize_key,
+        **(config or ProducerConfig()).model_dump(),
+    )
+    await producer.start()
+    return producer
+
+
+class BaseKafkaProducer(ABC):
     """
     Base async Kafka producer.
 
-    One `AIOKafkaProducer` is created lazily per subclass, once per process, and shared by all its
-    instances, so a producer repository can be instantiated freely. Events are serialized with msgpack from
+    The `AIOKafkaProducer` is obtained for every send from `producer_factory`, a `ConnectionManagerFactory`
+    called with `alias`, like a ddsql adapter runs a query inside `factory(alias=...)`. The factory owns the
+    lifecycle: which cluster the alias means, the scope the producer lives in (one per process and event
+    loop), its lazy start with `create_producer` and its stop on shutdown (`close()`). Events are serialized with msgpack from
     `model_dump(mode='json')` and keyed by `idempotent_key`.
 
     `create` and `bulk_create` return once the record is in the producer's buffer; aiokafka sends
     buffered records in batches (`linger_ms`, `max_batch_size`). A record the broker rejects is
-    reported with an ERROR log entry, since nothing awaits its delivery.
-
-    The buffer only reaches Kafka while the process runs: call `stop()` on application shutdown,
-    otherwise up to `linger_ms` worth of records is lost on SIGTERM.
+    reported with an ERROR log entry, since nothing awaits its delivery. The buffer only reaches Kafka
+    while the process runs: close the factory on application shutdown (the producer's `stop` sends what
+    is buffered), otherwise up to `linger_ms` worth of records is lost on SIGTERM.
 
     Class Attributes:
-        bootstrap_servers: Kafka servers address
-        config: Producer configuration
+        producer_factory: Opens a context handing out the producer of `alias`
+        alias: The cluster to produce to; None picks the factory's default
 
     Example:
-        class EventProducerRepository(BaseKafkaProducerRepository):
-            bootstrap_servers = ['kafka:9092']
-            config = ProducerConfig(linger_ms=100)
+        producer_registries = {
+            KafkaConnectionAlias.PRIMARY: ScopedRegistry[AIOKafkaProducer](
+                create_func=partial(create_producer, ['kafka:9092'], ProducerConfig(linger_ms=100)),
+                scope_func=os.getpid,
+                destructor_method_name='stop',
+            ),
+        }
+        kafka_producer_factory = ConnectionManagerFactory(producer_registries, default=KafkaConnectionAlias.PRIMARY)
 
-        producer_repository_impl = EventProducerRepository()
-        await producer_repository_impl.bulk_create('topic', events)
+        class EventProducer(BaseKafkaProducer):
+            producer_factory = kafka_producer_factory
+
+        event_producer_impl = EventProducer()
+        await event_producer_impl.bulk_create('topic', events)
         ...
-        await EventProducerRepository.stop()  # on shutdown
+        await kafka_producer_factory.close()  # on shutdown
     """
 
-    bootstrap_servers: ClassVar[list[str]]
-    config: ClassVar[ProducerConfig] = ProducerConfig()
-
-    _producer: ClassVar[AIOKafkaProducer | None] = None
-    _producer_lock: ClassVar[asyncio.Lock]
-    _stopped: ClassVar[bool] = False
+    producer_factory: ClassVar[ConnectionManagerFactory[Any, AIOKafkaProducer, AbstractAsyncContextManager[AIOKafkaProducer]]]
+    alias: ClassVar[Hashable | None] = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        require_class_attribute(cls, 'bootstrap_servers', list)
-        require_class_attribute(cls, 'config', ProducerConfig)
-        cls._producer_lock = asyncio.Lock()
-
-    @classmethod
-    async def _get_producer(cls) -> AIOKafkaProducer:
-        if cls._producer is not None:
-            return cls._producer
-
-        # The lock makes the first concurrent sends start one producer instead of one each.
-        async with cls._producer_lock:
-            if cls._stopped:
-                raise RuntimeError(f'{cls.__name__} producer was stopped')
-            if cls._producer is None:
-                producer = AIOKafkaProducer(
-                    bootstrap_servers=cls.bootstrap_servers,
-                    value_serializer=serialize_value,
-                    key_serializer=serialize_key,
-                    **cls.config.model_dump(),
-                )
-                await producer.start()
-                cls._producer = producer
-            return cls._producer
-
-    @classmethod
-    async def stop(cls) -> None:
-        """
-        Sends what is still buffered and closes the producer. Call it on application shutdown.
-
-        A producer is created once per process: after `stop` the repository refuses to send.
-        """
-        async with cls._producer_lock:
-            cls._stopped = True
-            if cls._producer is not None:
-                await cls._producer.stop()
-                cls._producer = None
+        require_class_attribute(cls, 'producer_factory', ConnectionManagerFactory)
 
     @classmethod
     async def _send(cls, producer: AIOKafkaProducer, topic: str, event: Producible) -> None:
@@ -125,13 +112,13 @@ class BaseKafkaProducerRepository(ABC):
         future.add_done_callback(partial(_log_delivery_failure, topic, key))
 
     async def create(self, topic: str, event: Producible) -> None:
-        producer = await self._get_producer()
-        await self._send(producer, topic, event)
-
-    async def bulk_create(self, topic: str, events: list[Producible]) -> None:
-        producer = await self._get_producer()
-        for event in events:
+        async with self.producer_factory(alias=self.alias) as producer:
             await self._send(producer, topic, event)
 
+    async def bulk_create(self, topic: str, events: list[Producible]) -> None:
+        async with self.producer_factory(alias=self.alias) as producer:
+            for event in events:
+                await self._send(producer, topic, event)
 
-__all__ = ('BaseKafkaProducerRepository', 'Producible', 'serialize_key', 'serialize_value')
+
+__all__ = ('BaseKafkaProducer', 'Producible', 'create_producer', 'serialize_key', 'serialize_value')

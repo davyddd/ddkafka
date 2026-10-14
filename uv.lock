@@ -266,7 +266,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "aiokafka", specifier = ">=0.12,<0.15" },
-    { name = "ddutils", specifier = ">=0.2.3,<0.3.0" },
+    { name = "ddutils", specifier = ">=0.3.0,<0.4.0" },
     { name = "msgpack", specifier = ">=1.0,<2" },
     { name = "pydantic", specifier = ">=2.0,<3" },
 ]
@@ -289,11 +289,11 @@ test = [
 
 [[package]]
 name = "ddutils"
-version = "0.2.3"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c8/01/b3ce3f3c7732a405d3743b5408af643ee7b0d9c40cc3cee75a0a10ffa3cc/ddutils-0.2.3.tar.gz", hash = "sha256:883ba4a1eb35c22245e8065ea7d842467dde43e164f8bab292eaa3e5c257d8a2", size = 13964, upload-time = "2026-10-11T16:02:55.831Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c8/6d/ac32e5193f45af40a489e8329a0c4a984f15d2eeb554f4b21aeb91852181/ddutils-0.3.0.tar.gz", hash = "sha256:0ed1116bc8ecb095155c9e5fec8acc2d8dfc38cb912cb450a7363f6e7620b744", size = 16116, upload-time = "2026-10-14T11:15:41.197Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/3e/0018183b31ceac93cade0a8fd7e2f10119a4752d4dffcafdb9fdd1b51ae2/ddutils-0.2.3-py3-none-any.whl", hash = "sha256:da7db1abdb5175075285dac56289c56db0abacc8ce8e2d0ab720c3361295dd23", size = 17627, upload-time = "2026-10-11T16:02:54.403Z" },
+    { url = "https://files.pythonhosted.org/packages/df/d9/08993ec1efaea8b3ef0b2350d38a4f1d76735b2a3190e180fbcc5286dce7/ddutils-0.3.0-py3-none-any.whl", hash = "sha256:b2294d8c37d57f2f572410a9ece28342a817d13d1ae07f2622c02e08ba99f1ff", size = 20258, upload-time = "2026-10-14T11:15:39.833Z" },
 ]
 
 [[package]]

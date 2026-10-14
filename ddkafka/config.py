@@ -109,7 +109,7 @@ class ConsumerConfig(BaseModel):
     enable_auto_commit: Literal[False] = Field(
         default=False,
         description=(
-            'Must stay False: `BaseKafkaConsumerRepository.commit` acknowledges offsets after a batch is '
+            'Must stay False: `BaseKafkaConsumer.commit` acknowledges offsets after a batch is '
             'processed. Auto commit would acknowledge records as soon as they are fetched, and a crash in the '
             'middle of a batch would lose them.'
         ),

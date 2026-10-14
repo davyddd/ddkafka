@@ -31,9 +31,9 @@ class MessageDeserializationError(Exception):
         super().__init__(f'Cannot deserialize the message at {topic}[{partition}] offset {offset}')
 
 
-class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
+class BaseKafkaConsumer(ABC, Generic[DomainT]):
     """
-    Base async Kafka consumer repository: one instance reads one partition of `topic` in batches.
+    Base async Kafka consumer: one instance reads one partition of `topic` in batches.
 
     Messages are msgpack payloads turned into the domain type with `model_validate`. `get_batches`
     polls until the partition runs dry or a poll comes back too thin (`min_batch_fill_ratio`),
@@ -55,7 +55,7 @@ class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
         config: Consumer configuration
 
     Example:
-        class ProfileEventConsumerRepository(BaseKafkaConsumerRepository[ProfileEvent]):
+        class ProfileEventConsumer(BaseKafkaConsumer[ProfileEvent]):
             bootstrap_servers = ['kafka:9092']
             topic = 'profile_events'
             group_id = 'analytics_context'
@@ -76,11 +76,9 @@ class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
 
-        domain_class = get_generic_base_argument(cls, BaseKafkaConsumerRepository)
+        domain_class = get_generic_base_argument(cls, BaseKafkaConsumer)
         if domain_class is None or isinstance(domain_class, TypeVar):
-            raise TypeError(
-                f'{cls.__name__} must specify domain type: class {cls.__name__}(BaseKafkaConsumerRepository[YourDomain])'
-            )
+            raise TypeError(f'{cls.__name__} must specify domain type: class {cls.__name__}(BaseKafkaConsumer[YourDomain])')
         cls._domain_class = domain_class
 
         require_class_attribute(cls, 'bootstrap_servers', list)
@@ -229,4 +227,4 @@ class BaseKafkaConsumerRepository(ABC, Generic[DomainT]):
         self._processed_offsets.clear()
 
 
-__all__ = ('BaseKafkaConsumerRepository', 'Deserializable', 'MessageDeserializationError')
+__all__ = ('BaseKafkaConsumer', 'Deserializable', 'MessageDeserializationError')

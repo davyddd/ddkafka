@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any, Generic, Protocol, Self, TypeVar
 
-from ddkafka.consumer import BaseKafkaConsumerRepository, Deserializable
+from ddkafka.consumer import BaseKafkaConsumer, Deserializable
 
 
 class Lockable(Protocol):
@@ -29,7 +29,7 @@ MAX_BEAT_SHARE_OF_LOCK_TIMEOUT = 0.5
 DomainT = TypeVar('DomainT', bound=Deserializable)
 
 
-class KafkaConsumerRepositoryMaker(Generic[DomainT]):
+class KafkaConsumerMaker(Generic[DomainT]):
     """
     Context manager for a Kafka consumer guarded by a distributed lock.
 
@@ -54,8 +54,8 @@ class KafkaConsumerRepositoryMaker(Generic[DomainT]):
     pace that does not fit is refused at construction.
 
     Example:
-        async with KafkaConsumerRepositoryMaker(
-            consumer_class=EventConsumerRepository,
+        async with KafkaConsumerMaker(
+            consumer_class=EventConsumer,
             partition=0,
             lock_class=RedisLock,
             lock_kwargs={'redis_client': redis_client, 'timeout': 300}
@@ -66,7 +66,7 @@ class KafkaConsumerRepositoryMaker(Generic[DomainT]):
 
     def __init__(
         self,
-        consumer_class: type[BaseKafkaConsumerRepository[DomainT]],
+        consumer_class: type[BaseKafkaConsumer[DomainT]],
         partition: int,
         lock_class: type[Lockable],
         lock_kwargs: dict[str, Any],
@@ -104,12 +104,12 @@ class KafkaConsumerRepositoryMaker(Generic[DomainT]):
             )
 
     @staticmethod
-    def build_lock_key(consumer_class: type[BaseKafkaConsumerRepository[Any]], partition: int) -> str:
+    def build_lock_key(consumer_class: type[BaseKafkaConsumer[Any]], partition: int) -> str:
         return f'{consumer_class.group_id}_{consumer_class.topic}_partition_{partition}'
 
     async def get_batches(self) -> AsyncIterator[tuple[DomainT, ...]]:
         while True:
-            async for batch in self.consumer_repo.get_batches():
+            async for batch in self.consumer.get_batches():
                 yield batch
                 await self.checkpoint()
 
@@ -140,7 +140,7 @@ class KafkaConsumerRepositoryMaker(Generic[DomainT]):
         fails, those records are gone.
         """
         await self.lock.extend()
-        await self.consumer_repo.commit()
+        await self.consumer.commit()
 
     async def __aenter__(self) -> Self:
         await self.lock.acquire()
@@ -149,8 +149,8 @@ class KafkaConsumerRepositoryMaker(Generic[DomainT]):
         # locked until the lock's timeout: the constructor (aiokafka needs a running loop) as much
         # as `start` (no broker).
         try:
-            self.consumer_repo = self._consumer_class(partition=self._partition)
-            await self.consumer_repo.start()
+            self.consumer = self._consumer_class(partition=self._partition)
+            await self.consumer.start()
         except Exception as e:  # noqa: BLE001
             await self._close()
             raise ConsumerStartError('Failed to start consumer') from e
@@ -159,8 +159,8 @@ class KafkaConsumerRepositoryMaker(Generic[DomainT]):
 
     async def _close(self) -> None:
         try:
-            if hasattr(self, 'consumer_repo'):
-                await self.consumer_repo.stop()
+            if hasattr(self, 'consumer'):
+                await self.consumer.stop()
         finally:
             await self.lock.release()
 
@@ -169,9 +169,9 @@ class KafkaConsumerRepositoryMaker(Generic[DomainT]):
         # the caller must not commit: the batch it failed on stays in the topic for the next run.
         try:
             if exc_type is None:
-                await self.consumer_repo.commit()
+                await self.consumer.commit()
         finally:
             await self._close()
 
 
-__all__ = ('ConsumerStartError', 'KafkaConsumerRepositoryMaker', 'Lockable')
+__all__ = ('ConsumerStartError', 'KafkaConsumerMaker', 'Lockable')

@@ -1,13 +1,18 @@
 import asyncio
-from typing import ClassVar, cast
+import os
+from functools import partial
+from typing import cast
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import patch
 
 import msgpack
+from aiokafka import AIOKafkaProducer
 from aiokafka.errors import NotEnoughReplicasError
+from ddutils.connections import ConnectionManagerFactory
+from ddutils.scoped_registry import ScopedRegistry
 
 from ddkafka.config import ProducerConfig
-from ddkafka.producer import BaseKafkaProducerRepository, serialize_key, serialize_value
+from ddkafka.producer import BaseKafkaProducer, create_producer, serialize_key, serialize_value
 from tests.fakes import BOOTSTRAP_SERVERS, Event, FakeAIOKafkaProducer
 
 
@@ -26,69 +31,120 @@ class TestSerializers(IsolatedAsyncioTestCase):
         self.assertIsNone(serialize_key(None))
 
 
-class TestBaseKafkaProducerRepository(IsolatedAsyncioTestCase):
-    def test_subclass_requires_bootstrap_servers(self):
-        # Act & Assert
-        with self.assertRaisesRegex(AttributeError, 'bootstrap_servers.*must be set'):
-
-            class NoServers(BaseKafkaProducerRepository):
-                pass
-
-        with self.assertRaisesRegex(TypeError, 'bootstrap_servers.*must be list'):
-
-            class StringServers(BaseKafkaProducerRepository):
-                bootstrap_servers = 'kafka:9092'  # type: ignore[assignment]
-
-    def test_subclass_requires_a_producer_config(self):
-        # Act & Assert
-        with self.assertRaisesRegex(TypeError, 'config.*must be ProducerConfig'):
-
-            class DictConfig(BaseKafkaProducerRepository):
-                bootstrap_servers = BOOTSTRAP_SERVERS
-                config = {'acks': 1}  # type: ignore[assignment]
-
-    async def test_producer_is_created_once_per_class_and_sends_serialized_events(self):
+class TestCreateProducer(IsolatedAsyncioTestCase):
+    async def test_builds_a_started_producer_with_the_serializers_and_config(self):
         # Arrange
-        class EventProducerRepository(BaseKafkaProducerRepository):
-            bootstrap_servers = BOOTSTRAP_SERVERS
-            config: ClassVar[ProducerConfig] = ProducerConfig(linger_ms=5, enable_idempotence=True)
-
         created: list[FakeAIOKafkaProducer] = []
 
         def factory(**kwargs):
             created.append(FakeAIOKafkaProducer(**kwargs))
             return created[-1]
 
+        # Act
         with patch('ddkafka.producer.AIOKafkaProducer', side_effect=factory):
-            # Act
-            await EventProducerRepository().create('events', Event(event_id=1, name='a'))
-            await EventProducerRepository().bulk_create('events', [Event(event_id=2, name='b'), Event(event_id=3, name='c')])
+            producer = await create_producer(BOOTSTRAP_SERVERS, ProducerConfig(linger_ms=5, enable_idempotence=True))
 
         # Assert
-        self.assertEqual(len(created), 1)
-        producer = created[0]
-        self.assertTrue(producer.started)
-        self.assertEqual(producer.kwargs['bootstrap_servers'], BOOTSTRAP_SERVERS)
-        self.assertEqual(producer.kwargs['linger_ms'], 5)
-        self.assertEqual(producer.kwargs['acks'], 'all')
-        self.assertTrue(producer.kwargs['enable_idempotence'])
+        fake = created[0]
+        self.assertIs(producer, fake)
+        self.assertTrue(fake.started)
+        self.assertEqual(fake.kwargs['bootstrap_servers'], BOOTSTRAP_SERVERS)
+        self.assertEqual(fake.kwargs['linger_ms'], 5)
+        self.assertEqual(fake.kwargs['acks'], 'all')
+        self.assertTrue(fake.kwargs['enable_idempotence'])
+        self.assertIs(fake.kwargs['value_serializer'], serialize_value)
+        self.assertIs(fake.kwargs['key_serializer'], serialize_key)
+
+
+class TestBaseKafkaProducer(IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.created: list[FakeAIOKafkaProducer] = []
+
+        def factory(**kwargs):
+            self.created.append(FakeAIOKafkaProducer(**kwargs))
+            return self.created[-1]
+
+        patcher = patch('ddkafka.producer.AIOKafkaProducer', side_effect=factory)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        self.registries = {
+            alias: ScopedRegistry[AIOKafkaProducer](
+                create_func=partial(create_producer, [f'{alias}:9092']), scope_func=os.getpid, destructor_method_name='stop'
+            )
+            for alias in ('primary', 'replica')
+        }
+        self.factory = ConnectionManagerFactory(self.registries, default='primary')
+
+        class EventProducer(BaseKafkaProducer):
+            producer_factory = self.factory
+
+        self.producer_class = EventProducer
+
+    async def asyncTearDown(self):
+        await self.factory.close()
+
+    def test_subclass_requires_a_factory(self):
+        # Act & Assert
+        with self.assertRaisesRegex(AttributeError, 'producer_factory.*must be set'):
+
+            class NoFactory(BaseKafkaProducer):
+                pass
+
+        with self.assertRaisesRegex(TypeError, 'producer_factory.*must be ConnectionManagerFactory'):
+
+            class RegistryInstead(BaseKafkaProducer):
+                producer_factory = self.registries['primary']  # type: ignore[assignment]
+
+    async def test_alias_is_passed_to_the_factory(self):
+        # Arrange
+        class ReplicaProducer(self.producer_class):  # type: ignore[misc]
+            alias = 'replica'
+
+        # Act
+        await self.producer_class().create('events', Event(event_id=1, name='a'))
+        await ReplicaProducer().create('events', Event(event_id=2, name='b'))
+
+        # Assert: one producer per cluster, each sent to through its own registry
+        self.assertEqual([p.kwargs['bootstrap_servers'] for p in self.created], [['primary:9092'], ['replica:9092']])
+
+    async def test_sends_serialized_events_through_the_factory_producer(self):
+        # Act
+        await self.producer_class().create('events', Event(event_id=1, name='a'))
+        await self.producer_class().bulk_create('events', [Event(event_id=2, name='b'), Event(event_id=3, name='c')])
+
+        # Assert: one producer for every instance of the class
+        self.assertEqual(len(self.created), 1)
+        producer = self.created[0]
         self.assertEqual([key for _, key, _ in producer.sent], [b'1', b'2', b'3'])
         self.assertEqual(msgpack.loads(producer.sent[2][2]), {'event_id': 3, 'name': 'c'})
 
+    async def test_concurrent_first_sends_start_one_producer(self):
+        # Arrange
+        repo = self.producer_class()
+        events = [Event(event_id=i, name='x') for i in range(5)]
+
+        # Act
+        await asyncio.gather(*(repo.create('events', event) for event in events))
+
+        # Assert
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(len(self.created[0].sent), 5)
+
+    async def test_closing_the_factory_stops_the_producer(self):
+        # Arrange
+        await self.producer_class().create('events', Event(event_id=1, name='a'))
+
+        # Act
+        await self.factory.close()
+
+        # Assert
+        self.assertTrue(self.created[0].stopped)
+
     async def test_rejected_delivery_is_logged_and_accepted_one_is_silent(self):
         # Arrange
-        class EventProducerRepository(BaseKafkaProducerRepository):
-            bootstrap_servers = BOOTSTRAP_SERVERS
-
-        created: list[FakeAIOKafkaProducer] = []
-
-        def factory(**kwargs):
-            created.append(FakeAIOKafkaProducer(**kwargs))
-            return created[-1]
-
-        with patch('ddkafka.producer.AIOKafkaProducer', side_effect=factory):
-            await EventProducerRepository().bulk_create('events', [Event(event_id=1, name='a'), Event(event_id=2, name='b')])
-        producer = created[0]
+        await self.producer_class().bulk_create('events', [Event(event_id=1, name='a'), Event(event_id=2, name='b')])
+        producer = self.created[0]
 
         # Act
         with self.assertLogs('ddkafka.producer', level='ERROR') as logs:
@@ -102,57 +158,3 @@ class TestBaseKafkaProducerRepository(IsolatedAsyncioTestCase):
         self.assertEqual(entry['topic'], 'events')
         self.assertEqual(entry['key'], '2')
         self.assertIn('NotEnoughReplicasError', entry['error'])
-
-
-class TestProducerLifecycle(IsolatedAsyncioTestCase):
-    def setUp(self):
-        self.created: list[FakeAIOKafkaProducer] = []
-
-        def factory(**kwargs):
-            self.created.append(FakeAIOKafkaProducer(**kwargs))
-            return self.created[-1]
-
-        patcher = patch('ddkafka.producer.AIOKafkaProducer', side_effect=factory)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-        class EventProducerRepository(BaseKafkaProducerRepository):
-            bootstrap_servers = BOOTSTRAP_SERVERS
-
-        self.repository_class = EventProducerRepository
-
-    async def test_concurrent_first_sends_start_one_producer(self):
-        # Arrange
-        repo = self.repository_class()
-        events = [Event(event_id=i, name='x') for i in range(5)]
-
-        # Act
-        await asyncio.gather(*(repo.create('events', event) for event in events))
-
-        # Assert
-        self.assertEqual(len(self.created), 1)
-        self.assertEqual(len(self.created[0].sent), 5)
-
-    async def test_stop_flushes_and_the_repository_refuses_to_send_afterwards(self):
-        # Arrange
-        repo = self.repository_class()
-        await repo.create('events', Event(event_id=1, name='a'))
-
-        # Act
-        await self.repository_class.stop()
-        await self.repository_class.stop()  # nothing to stop, no error
-
-        # Assert
-        self.assertTrue(self.created[0].stopped)
-        with self.assertRaisesRegex(RuntimeError, 'was stopped'):
-            await repo.create('events', Event(event_id=2, name='b'))
-        self.assertEqual(len(self.created), 1)
-
-    async def test_stop_before_any_send_still_closes_the_repository(self):
-        # Act
-        await self.repository_class.stop()
-
-        # Assert
-        with self.assertRaises(RuntimeError):
-            await self.repository_class().create('events', Event(event_id=1, name='a'))
-        self.assertEqual(self.created, [])

@@ -1,7 +1,7 @@
 [project]
 name = "ddkafka"
 description = "Kafka helpers: batch consumer, lock-guarded consumer maker and msgpack producer on top of aiokafka"
-version = "0.0.2"
+version = "0.1.0"
 authors = [{ name = "davyddd" }]
 license = "MIT"
 license-files = ["LICENSE"]
@@ -20,8 +20,8 @@ classifiers = [
 dependencies = [
     "aiokafka>=0.12,<0.15",
     "msgpack>=1.0,<2",
-    "ddutils>=0.3.0,<0.4.0",
-    "pydantic>=2.0,<3",
+    "ddutils>=0.3.1,<0.4.0",
+    "pydantic>=2.10,<3",  # `_BaseMultiHostUrl` behind KafkaDsn
 ]
 
 [project.urls]

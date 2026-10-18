@@ -58,7 +58,7 @@ class KafkaConsumerMaker(Generic[DomainT]):
             consumer_class=EventConsumer,
             partition=0,
             lock_class=RedisLock,
-            lock_kwargs={'redis_client': redis_client, 'timeout': 300}
+            lock_kwargs={'client_factory': redis_client_factory, 'timeout': 300}
         ) as maker:
             async for batch in maker.get_batches():
                 process(batch)

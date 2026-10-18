@@ -1,7 +1,7 @@
 [project]
 name = "ddkafka"
 description = "Kafka helpers: batch consumer, lock-guarded consumer maker and msgpack producer on top of aiokafka"
-version = "0.1.0"
+version = "0.1.1"
 authors = [{ name = "davyddd" }]
 license = "MIT"
 license-files = ["LICENSE"]

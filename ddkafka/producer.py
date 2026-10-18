@@ -1,7 +1,6 @@
 from abc import ABC
 from asyncio import Future
 from collections.abc import Hashable
-from contextlib import AbstractAsyncContextManager
 from functools import partial
 from logging import getLogger
 from typing import Any, ClassVar, Protocol
@@ -98,7 +97,9 @@ class BaseKafkaProducer(ABC):
         await kafka_producer_factory.close()  # on shutdown
     """
 
-    producer_factory: ClassVar[ConnectionManagerFactory[Any, AIOKafkaProducer, AbstractAsyncContextManager[AIOKafkaProducer]]]
+    # The manager type is `Any`: a project's ConnectionManagerFactory[Alias, AIOKafkaProducer, ConnectionManager[...]]
+    # must be assignable, and the type checker treats the parameter as invariant
+    producer_factory: ClassVar[ConnectionManagerFactory[Any, AIOKafkaProducer, Any]]
     alias: ClassVar[Hashable | None] = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:

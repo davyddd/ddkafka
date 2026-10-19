@@ -238,7 +238,7 @@ toml = [
 
 [[package]]
 name = "ddkafka"
-version = "0.1.0"
+version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiokafka" },
@@ -266,7 +266,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "aiokafka", specifier = ">=0.12,<0.15" },
-    { name = "ddutils", specifier = ">=0.3.1,<0.4.0" },
+    { name = "ddutils", specifier = ">=0.4.0,<0.5.0" },
     { name = "msgpack", specifier = ">=1.0,<2" },
     { name = "pydantic", specifier = ">=2.10,<3" },
 ]
@@ -289,11 +289,11 @@ test = [
 
 [[package]]
 name = "ddutils"
-version = "0.3.1"
+version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/83/3b/1c92b38aac7bf5ebcb68de5d2916ae0cc9e6645edf25086b77d53ab35179/ddutils-0.3.1.tar.gz", hash = "sha256:09ef446ef57161ab1a56e2cfec674ac58bce64fc9a22bd7238774be55e7b7580", size = 18128, upload-time = "2026-10-14T14:46:41.021Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/51/8d/e07934dc3a88b10395504cc39980b08bf6836cb58aa323b8f49d6ff7e458/ddutils-0.4.1.tar.gz", hash = "sha256:29602b11a903f0e204fdd5bdbff9d6808db262a8c47486ea878af623caa1d7c6", size = 35772, upload-time = "2026-10-19T18:00:01.098Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/c4/d450e6acbb45331ab170ed4210eec0a882ffb798f8b62e7d04d31ba2850d/ddutils-0.3.1-py3-none-any.whl", hash = "sha256:e7c8ab8c70d4f53a6ee20cbd926988e056684e1d0e66e740d26b227ba24abdb0", size = 22584, upload-time = "2026-10-14T14:46:39.624Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/a7/cd0240907c87810f771bfc49cbe0cb9de5fa032ef0525e17ae4b4d5aa435/ddutils-0.4.1-py3-none-any.whl", hash = "sha256:f41becdbbc68a2ae42c807a2b29354ec041d766148206c3fd7b071d3f5ad0ca2", size = 32988, upload-time = "2026-10-19T17:59:59.515Z" },
 ]
 
 [[package]]

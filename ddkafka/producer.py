@@ -82,7 +82,7 @@ class BaseKafkaProducer(ABC):
         producer_registries = {
             KafkaConnectionAlias.PRIMARY: ScopedRegistry[AIOKafkaProducer](
                 create_func=partial(create_producer, ['kafka:9092'], ProducerConfig(linger_ms=100)),
-                scope_func=os.getpid,
+                scope_func=process_loop_scope,
                 destructor_method_name='stop',
             ),
         }

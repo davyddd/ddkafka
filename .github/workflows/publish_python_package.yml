@@ -7,14 +7,14 @@ on:
 
 jobs:
     quality-assurance:
-        uses: davyddd/dd-lib-stub/.github/workflows/quality_assurance.yml@v0.0.9
+        uses: davyddd/dd-lib-stub/.github/workflows/quality_assurance.yml@v0.0.12
         with:
             test-matrix: '{"python-version": ["3.11", "3.12", "3.13", "3.14"], "aiokafka": ["aiokafka<0.13", "aiokafka<0.14", "aiokafka<0.15"], "exclude": [{"python-version": "3.14", "aiokafka": "aiokafka<0.13"}]}'
             default-python-version: '3.14'
         secrets: inherit
     build:
         needs: quality-assurance
-        uses: davyddd/dd-lib-stub/.github/workflows/build_python_package.yml@v0.0.9
+        uses: davyddd/dd-lib-stub/.github/workflows/build_python_package.yml@v0.0.12
         with:
             package-name: ddkafka
             python-version: '3.14'
@@ -37,13 +37,13 @@ jobs:
             -   uses: pypa/gh-action-pypi-publish@release/v1
     release:
         needs: publish
-        uses: davyddd/dd-lib-stub/.github/workflows/github_release.yml@v0.0.9
+        uses: davyddd/dd-lib-stub/.github/workflows/github_release.yml@v0.0.12
         permissions:
             contents: write
     coverage:
         # last: the coverage report is uploaded only once the release is out
         needs: release
-        uses: davyddd/dd-lib-stub/.github/workflows/coverage.yml@v0.0.9
+        uses: davyddd/dd-lib-stub/.github/workflows/coverage.yml@v0.0.12
         with:
             package-name: ddkafka
             python-version: '3.14'

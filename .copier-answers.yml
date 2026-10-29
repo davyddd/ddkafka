@@ -1,10 +1,10 @@
 # Changes here will be overwritten by Copier; do NOT edit manually.
-_commit: v0.0.12
+_commit: v0.0.13
 _src_path: gh:davyddd/dd-lib-stub
 copyright_year: 2026
-max_python_version: '3.14'
+max_python_version: '3.15'
 min_python_version: '3.11'
 package_description: 'Kafka helpers: batch consumer, lock-guarded consumer maker and msgpack producer on top of aiokafka'
 package_keywords: python, ddkafka, kafka, aiokafka, asyncio, event streaming, events, producer, consumer, batch consumer, partition, consumer group, at-least-once, msgpack, dsn
 package_name: ddkafka
-test_matrix: '{"aiokafka": ["aiokafka<0.13", "aiokafka<0.14", "aiokafka<0.15"], "exclude": [{"python-version": "3.14", "aiokafka": "aiokafka<0.13"}]}'
+test_matrix: '{"aiokafka": ["aiokafka<0.13", "aiokafka<0.14", "aiokafka<0.15", "aiokafka<0.16"], "exclude": [{"python-version": "3.14", "aiokafka": "aiokafka<0.13"}, {"python-version": "3.15", "aiokafka": "aiokafka<0.13"}, {"python-version": "3.15", "aiokafka": "aiokafka<0.14"}, {"python-version": "3.15", "aiokafka": "aiokafka<0.15"}]}'

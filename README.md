@@ -32,12 +32,12 @@ run `uvx copier update` to pull in template updates.
 
 ## Compatibility
 
-Python 3.11 to 3.14. What changed in each release, breaking changes included,
+Python 3.11 to 3.15. What changed in each release, breaking changes included,
 is in the [GitHub releases](https://github.com/davyddd/ddkafka/releases).
 
 <!-- The sections below are the library's own; copier update leaves them alone -->
 
-Depends on `aiokafka>=0.12,<0.15`, `msgpack>=1,<2`, `ddutils>=0.4.0,<0.5.0` and `pydantic>=2.10,<3` (see `KafkaDsn`).
+Depends on `aiokafka>=0.12,<0.16`, `msgpack>=1,<2`, `ddutils>=0.4.0,<0.5.0` and `pydantic>=2.10,<3` (see `KafkaDsn`).
 The tests run against fakes of the aiokafka clients, no broker is needed.
 
 ## KafkaDsn
